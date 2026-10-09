@@ -75,9 +75,6 @@ export interface ComfyuiCancelCapabilities {
 /** Per-request overrides are the HTTP surface's; this is the transport's own. */
 export interface ComfyuiTransportSettings extends ComfyuiRequestOptions {
   baseURL?: string
-  /** A Comfy API key. Partner (API) nodes read it from the prompt's `extra_data`;
-   * it is never sent as a header, since the server itself takes no auth. */
-  apiKey?: string
 }
 
 /** One `/history/{id}` entry: the images it produced, or the failure it reported. */
@@ -132,7 +129,6 @@ class ComfyuiTransport implements ImageGenerationTransport {
   private readonly baseURL: string
   private readonly headers: Record<string, string>
   private readonly doFetch: FetchFunction
-  private readonly apiKey?: string
   /** Cached target-specific interrupt capability promise. Resolved once on
    *  first `cancel()` call and cached for the transport's lifetime; failures
    *  are also cached (fail-closed: persistent false result, never retry). */
@@ -142,7 +138,6 @@ class ComfyuiTransport implements ImageGenerationTransport {
     this.baseURL = normalizeComfyuiBaseUrl(settings.baseURL || DEFAULT_COMFYUI_BASE_URL)
     this.headers = settings.headers ?? {}
     this.doFetch = settings.fetch ?? fetch
-    this.apiKey = settings.apiKey?.trim() || undefined
   }
 
   async submit(input: ImageGenerationSubmitInput): Promise<{ taskId?: string; imageUrls?: string[] }> {
@@ -168,10 +163,7 @@ class ComfyuiTransport implements ImageGenerationTransport {
       )
     ])
 
-    // A seed the workflow set to `randomize` is redrawn per run, as the frontend
-    // does per queue; a seed the user typed still wins below.
-    const conversion = convertUiWorkflowToPrompt(workflow, objectInfo, { random: Math.random })
-    const { prompt: graph, warnings, promotedText } = conversion
+    const { prompt: graph, warnings, promotedText } = convertUiWorkflowToPrompt(workflow, objectInfo)
     for (const warning of warnings) logger.warn(`workflow conversion: ${warning}`)
 
     const target = findPromptTarget(graph, { promotedText, objectInfo })
@@ -189,7 +181,7 @@ class ComfyuiTransport implements ImageGenerationTransport {
       applySeed(graph, input.seed, target.samplerId)
     } else {
       // Nothing in the graph says which node the run's seed belongs to, so the
-      // run keeps the workflow's own seeds; a `randomize` one is still redrawn.
+      // whole run — the seed included — stays exactly as the workflow saved it.
       logger.warn(`workflow ${input.modelId} holds no prompt; running it as it was saved`)
     }
 
@@ -210,9 +202,7 @@ class ComfyuiTransport implements ImageGenerationTransport {
             body: JSON.stringify({
               prompt: graph,
               client_id: `cherry-studio-${Date.now()}`,
-              prompt_id: requestedPromptId,
-              // Where the frontend puts it too; ComfyUI redacts it from history.
-              ...(this.apiKey && { extra_data: { api_key_comfy_org: this.apiKey } })
+              prompt_id: requestedPromptId
             }),
             signal: deadlineSignal
           })

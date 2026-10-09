@@ -9,7 +9,7 @@ import { createComfyuiTransport, DEFAULT_COMFYUI_BASE_URL } from './comfyuiTrans
 export const COMFYUI_PROVIDER_NAME = 'comfyui' as const
 
 export interface ComfyuiProviderSettings {
-  /** A Comfy API key for the workflow's partner nodes; the server itself takes no auth. */
+  /** ComfyUI is a local server with no auth; accepted for symmetry, never read. */
   apiKey?: string
   /** ComfyUI host, e.g. `http://localhost:8188`. */
   baseURL?: string
@@ -35,7 +35,6 @@ export function createComfyuiProvider(settings: ComfyuiProviderSettings = {}): C
 
   const transport = createComfyuiTransport({
     baseURL: settings.imageBaseURL || settings.baseURL || DEFAULT_COMFYUI_BASE_URL,
-    apiKey: settings.apiKey,
     headers: settings.headers,
     fetch: settings.fetch
   })

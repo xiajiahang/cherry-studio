@@ -24,7 +24,7 @@ export function ConversationNotificationRuntime(): null {
         void ipcApi
           .request('navigation.focus_or_open_conversation', {
             target: notification.meta,
-            title: notification.conversationName
+            title: notification.message
           })
           .catch((error) => logger.error('Failed to open conversation from notification', error as Error))
       }

@@ -1,8 +1,5 @@
 import type { WebviewTag } from 'electron'
 
-import { cacheService } from '@renderer/data/CacheService'
-import { buildAgentSessionTopicId } from '@renderer/utils/agentSession'
-import { classifyTurn } from '@shared/ai/transport'
 import { WebviewSecurityProfile } from '@shared/utils/webviewSecurity'
 
 export interface AgentBrowserResource {
@@ -20,15 +17,12 @@ export interface AgentBrowserResource {
   failed: boolean
 }
 
-/** Browser instances outlive presentation subscriptions and retain active Agent turns without a tab. */
+/** Browser instances outlive presentation subscriptions, but never their owning tabs. */
 export class AgentBrowserRuntimeService {
   private readonly owners = new Map<string, Set<string>>()
   private readonly resources = new Map<string, AgentBrowserResource>()
   private readonly listeners = new Set<() => void>()
   private ids: readonly string[] = []
-  private readonly turnSubscriptions = new Map<string, () => void>()
-
-  constructor(private readonly scope: 'agent' | 'topic' = 'agent') {}
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
@@ -41,13 +35,18 @@ export class AgentBrowserRuntimeService {
   declare(sessionId: string, ownerTabId: string): void {
     for (const [previousSessionId, previousOwners] of this.owners) {
       if (previousSessionId === sessionId || !previousOwners.delete(ownerTabId)) continue
-      this.releaseUnowned(previousSessionId)
+      if (previousOwners.size === 0) {
+        this.owners.delete(previousSessionId)
+        this.resources.delete(previousSessionId)
+      }
     }
     const owners = this.owners.get(sessionId) ?? new Set<string>()
     owners.add(ownerTabId)
     this.owners.set(sessionId, owners)
-    this.turnSubscriptions.get(sessionId)?.()
-    this.turnSubscriptions.delete(sessionId)
+    if (this.ids.length !== this.resources.size) {
+      this.ids = [...this.resources.keys()]
+      this.emit()
+    }
   }
 
   ensure(sessionId: string, url?: string, profile: WebviewSecurityProfile = WebviewSecurityProfile.AgentBrowser): void {
@@ -93,25 +92,15 @@ export class AgentBrowserRuntimeService {
   reconcileOwners(tabIds: ReadonlySet<string>): void {
     for (const [sessionId, owners] of this.owners) {
       for (const id of owners) if (!tabIds.has(id)) owners.delete(id)
-      this.releaseUnowned(sessionId)
-    }
-  }
-
-  private releaseUnowned(sessionId: string): void {
-    if (this.owners.get(sessionId)?.size) return
-    if (this.scope === 'agent') {
-      const key = `topic.stream.statuses.${buildAgentSessionTopicId(sessionId)}` as const
-      if (classifyTurn(cacheService.getShared(key)?.status).isTurnActive) {
-        if (!this.turnSubscriptions.has(sessionId)) {
-          this.turnSubscriptions.set(
-            sessionId,
-            cacheService.subscribe(key, () => this.releaseUnowned(sessionId))
-          )
-        }
-        return
+      if (owners.size === 0) {
+        this.owners.delete(sessionId)
+        this.resources.delete(sessionId)
       }
     }
-    this.close(sessionId)
+    if (this.ids.length !== this.resources.size) {
+      this.ids = [...this.resources.keys()]
+      this.emit()
+    }
   }
 
   syncOwners(sessionByTab: ReadonlyMap<string, string>): void {
@@ -131,8 +120,6 @@ export class AgentBrowserRuntimeService {
   }
 
   close(sessionId: string): void {
-    this.turnSubscriptions.get(sessionId)?.()
-    this.turnSubscriptions.delete(sessionId)
     this.owners.delete(sessionId)
     if (!this.resources.delete(sessionId)) return
     this.ids = [...this.resources.keys()]
@@ -140,8 +127,6 @@ export class AgentBrowserRuntimeService {
   }
 
   dispose(): void {
-    for (const unsubscribe of this.turnSubscriptions.values()) unsubscribe()
-    this.turnSubscriptions.clear()
     this.owners.clear()
     this.resources.clear()
     this.ids = []
@@ -155,4 +140,4 @@ export class AgentBrowserRuntimeService {
 
 export const agentBrowserRuntimeService = new AgentBrowserRuntimeService()
 
-export const topicBrowserRuntimeService = new AgentBrowserRuntimeService('topic')
+export const topicBrowserRuntimeService = new AgentBrowserRuntimeService()
